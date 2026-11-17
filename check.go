@@ -9,6 +9,7 @@ package vulncheck
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +17,13 @@ import (
 	"time"
 )
 
-// installHint is how to install govulncheck, for the error when it is not
-// on PATH. Check never installs it.
-const installHint = "go install golang.org/x/vuln/cmd/govulncheck@latest"
+// InstallCommand is the command that installs govulncheck. Check and
+// Options.Command never run it; the error for a missing govulncheck names it.
+const InstallCommand = "go install golang.org/x/vuln/cmd/govulncheck@latest"
+
+// ErrNotInstalled is returned, wrapped, by Check and Options.Command when
+// Options.Govulncheck is "" and govulncheck is not on PATH.
+var ErrNotInstalled = errors.New("govulncheck is not on PATH")
 
 // Command is one program to run: its name or path, its arguments, and the
 // directory to run it in.
@@ -63,7 +68,7 @@ func Check(ctx context.Context, opts Options) (Report, error) {
 	if err := (Config{Ignore: opts.Ignore}).Validate(); err != nil {
 		return Report{}, err
 	}
-	cmd, err := opts.command()
+	cmd, err := opts.Command()
 	if err != nil {
 		return Report{}, err
 	}
@@ -86,9 +91,12 @@ func Check(ctx context.Context, opts Options) (Report, error) {
 	return report, nil
 }
 
-// command is the govulncheck invocation for opts. The program is made
-// absolute, so a relative path means the same program when run in Dir.
-func (o Options) command() (Command, error) {
+// Command returns the govulncheck command Check runs for o, without running
+// it: o.Govulncheck, else govulncheck from PATH, with -format json ./... in
+// o.Dir ("" is "."). The program is made absolute, so a relative path means
+// the same program when run in Dir. When o.Govulncheck is "" and govulncheck
+// is not on PATH the error wraps ErrNotInstalled and names InstallCommand.
+func (o Options) Command() (Command, error) {
 	dir := o.Dir
 	if dir == "" {
 		dir = "."
@@ -104,7 +112,7 @@ func (o Options) command() (Command, error) {
 	}
 	path, err := lookAbs("govulncheck")
 	if err != nil {
-		return Command{}, fmt.Errorf("govulncheck is not on PATH; install it with: %s", installHint)
+		return Command{}, fmt.Errorf("%w; install it with: %s", ErrNotInstalled, InstallCommand)
 	}
 	return Command{Name: path, Args: args, Dir: dir}, nil
 }

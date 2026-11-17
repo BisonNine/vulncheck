@@ -28,7 +28,7 @@ const (
 
 	// version is bare semver. Build tooling reads this line; keep it a single
 	// one-line assignment.
-	version = "0.1.0"
+	version = "0.1.1"
 )
 
 // Build metadata, injected via ldflags:

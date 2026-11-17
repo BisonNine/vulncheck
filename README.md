@@ -22,7 +22,7 @@ command.
 ## Run
 
 ```sh
-go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.0 [flags] [dir]
+go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1 [flags] [dir]
 ```
 
 `dir` is the project to scan and defaults to the current directory.
@@ -41,10 +41,10 @@ From a Makefile:
 
 ```make
 govulncheck:
-	@go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.0 .
+	@go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1 .
 ```
 
-To install the command instead: `go install go.bison9.com/vulncheck/cmd/vulncheck@v0.1.0`.
+To install the command instead: `go install go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1`.
 
 ## Configuration
 
@@ -114,8 +114,11 @@ a pass.
 
 The package `go.bison9.com/vulncheck` offers the same check to Go programs:
 `LoadFile` or `Parse` reads the configuration, `Check` runs govulncheck and
-`Decide` judges a captured `govulncheck -format json` stream. See the
-[package documentation](https://pkg.go.dev/go.bison9.com/vulncheck).
+`Decide` judges a captured `govulncheck -format json` stream.
+`Options.Command` returns the command `Check` would run, without running it,
+for a dry run. When govulncheck is not on `PATH`, both return an error that
+wraps `ErrNotInstalled`; `InstallCommand` is the command that installs it. See
+the [package documentation](https://pkg.go.dev/go.bison9.com/vulncheck).
 
 ## Licence
 
