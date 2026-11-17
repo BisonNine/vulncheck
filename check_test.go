@@ -54,7 +54,7 @@ func TestCommandSelection(t *testing.T) {
 
 	t.Run("from PATH", func(t *testing.T) {
 		want := fakeOnPath(t)
-		c, err := Options{Dir: "/src/demo"}.command()
+		c, err := Options{Dir: "/src/demo"}.Command()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +65,7 @@ func TestCommandSelection(t *testing.T) {
 
 	t.Run("dir defaults to the current directory", func(t *testing.T) {
 		fakeOnPath(t)
-		c, err := Options{}.command()
+		c, err := Options{}.Command()
 		if err != nil || c.Dir != "." {
 			t.Errorf("command = %+v, %v; want it run in .", c, err)
 		}
@@ -73,10 +73,17 @@ func TestCommandSelection(t *testing.T) {
 
 	t.Run("not on PATH", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
-		_, err := Options{}.command()
+		_, err := Options{}.Command()
 		want := "govulncheck is not on PATH; install it with: go install golang.org/x/vuln/cmd/govulncheck@latest"
 		if err == nil || err.Error() != want {
 			t.Errorf("error = %v, want %q", err, want)
+		}
+		if !errors.Is(err, ErrNotInstalled) {
+			t.Errorf("error = %v, want one wrapping ErrNotInstalled", err)
+		}
+		_, err = Check(t.Context(), Options{})
+		if !errors.Is(err, ErrNotInstalled) {
+			t.Errorf("Check error = %v, want one wrapping ErrNotInstalled", err)
 		}
 	})
 
@@ -89,7 +96,7 @@ func TestCommandSelection(t *testing.T) {
 		fakeProgram(t, bin, "govulncheck", "exit 0\n")
 		t.Setenv("PATH", bin)
 
-		c, err := Options{Dir: t.TempDir(), Govulncheck: "./scanner"}.command()
+		c, err := Options{Dir: t.TempDir(), Govulncheck: "./scanner"}.Command()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +114,7 @@ func TestCommandSelection(t *testing.T) {
 		bin := t.TempDir()
 		want := fakeProgram(t, bin, "govulncheck-1.9", "exit 0\n")
 		t.Setenv("PATH", bin)
-		c, err := Options{Govulncheck: "govulncheck-1.9"}.command()
+		c, err := Options{Govulncheck: "govulncheck-1.9"}.Command()
 		if err != nil || c.Name != want {
 			t.Errorf("command = %+v, %v; want %s", c, err, want)
 		}
@@ -115,10 +122,48 @@ func TestCommandSelection(t *testing.T) {
 
 	t.Run("override that does not exist", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "nothing")
-		if _, err := (Options{Govulncheck: missing}).command(); err == nil || !strings.Contains(err.Error(), missing) {
+		if _, err := (Options{Govulncheck: missing}).Command(); err == nil || !strings.Contains(err.Error(), missing) {
 			t.Errorf("error = %v, want one naming %s", err, missing)
 		}
 	})
+}
+
+// TestCheckRunsCommand checks that Check runs exactly what Command returns.
+func TestCheckRunsCommand(t *testing.T) {
+	bin := t.TempDir()
+	fakeProgram(t, bin, "govulncheck", "exit 0\n")
+	explicit := fakeProgram(t, t.TempDir(), "scanner", "exit 0\n")
+	t.Setenv("PATH", bin)
+	stream := readFixture(t, "govulncheck-imported.json")
+
+	tests := []struct {
+		name string
+		opts Options
+	}{
+		{"from PATH", Options{Dir: "/src/demo"}},
+		{"explicit program", Options{Dir: "/src/demo", Govulncheck: explicit}},
+		{"default dir", Options{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want, err := tt.opts.Command()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got Command
+			opts := tt.opts
+			opts.Runner = func(_ context.Context, c Command) ([]byte, error) {
+				got = c
+				return []byte(stream), nil
+			}
+			if _, err := Check(t.Context(), opts); err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if got.Name != want.Name || got.Dir != want.Dir || !slices.Equal(got.Args, want.Args) {
+				t.Errorf("Check ran %+v, Command returned %+v", got, want)
+			}
+		})
+	}
 }
 
 func TestCheck(t *testing.T) {
