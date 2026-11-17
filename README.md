@@ -22,7 +22,7 @@ command.
 ## Run
 
 ```sh
-go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1 [flags] [dir]
+go run go.bison9.com/vulncheck/cmd/vulncheck@latest [flags] [dir]
 ```
 
 `dir` is the project to scan and defaults to the current directory.
@@ -41,10 +41,10 @@ From a Makefile:
 
 ```make
 govulncheck:
-	@go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1 .
+	@go run go.bison9.com/vulncheck/cmd/vulncheck@latest .
 ```
 
-To install the command instead: `go install go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1`.
+To install the command instead: `go install go.bison9.com/vulncheck/cmd/vulncheck@latest`.
 
 ## Configuration
 
@@ -79,6 +79,19 @@ govulncheck:
 - Unknown keys inside the `govulncheck` block are errors.
 
 When the scan is turned off, vulncheck says so and exits 0.
+
+## Adding a temporary exception
+
+When the check fails on a vulnerability that has no fixed release yet:
+
+1. Take the ID from the `Vulnerable: GO-…` line.
+2. Add an entry under `govulncheck.ignore` in `b9.yaml` with that `id`, a
+   `reason`, and an `until` date a few weeks ahead.
+3. Run the check again: it passes and prints the vulnerability as ignored.
+
+After the `until` day the check fails again, so the exception comes back for
+review. When a fixed release exists, upgrade the dependency and delete the
+entry; a run tells you when an entry is no longer needed.
 
 ## Output and exit status
 
