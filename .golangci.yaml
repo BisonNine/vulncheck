@@ -1,0 +1,65 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # Style opinions this project does not hold.
+    - cyclop
+    - depguard
+    - err113
+    - exhaustruct
+    - exhaustruct_v5
+    - forbidigo # the command prints by design
+    - gochecknoglobals
+    - goconst
+    - gomodguard # deprecated
+    - godot
+    - lll
+    - mnd
+    - nlreturn
+    - noinlineerr
+    - nonamedreturns
+    - paralleltest # tests change PATH and the working directory
+    - tagliatelle # the JSON field names are govulncheck's
+    - testpackage
+    - varnamelen
+    - wrapcheck
+    - wsl
+    - wsl_v5
+  settings:
+    errcheck:
+      check-type-assertions: true
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    misspell:
+      locale: ""
+  exclusions:
+    rules:
+      # Tests are long tables, read fixtures, run stand-in programs and use
+      # the local time zone on purpose.
+      - linters:
+          - funlen
+          - gocognit
+          - gosec
+          - gosmopolitan
+          - maintidx
+        path: _test\.go$
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule

@@ -1,0 +1,100 @@
+{
+  "config": {
+    "protocol_version": "v1.0.0",
+    "scanner_name": "govulncheck",
+    "scanner_version": "v1.9.0",
+    "db": "https://vuln.go.dev",
+    "db_last_modified": "2026-11-11T02:51:11Z",
+    "go_version": "go1.27.4",
+    "scan_level": "symbol",
+    "scan_mode": "source"
+  }
+}
+{
+  "progress": {
+    "message": "Fetching vulnerabilities from the database..."
+  }
+}
+{
+  "osv": {
+    "schema_version": "1.3.1",
+    "id": "GO-2026-6911",
+    "modified": "2026-11-05T22:55:15Z",
+    "published": "2026-11-05T22:55:15Z",
+    "summary": "SSRF and credential leak via unvalidated Location header in github.com/mark3labs/mcp-go",
+    "affected": [
+      {
+        "package": {
+          "name": "github.com/mark3labs/mcp-go",
+          "ecosystem": "Go"
+        },
+        "ranges": [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "0"
+              }
+            ]
+          }
+        ],
+        "ecosystem_specific": {
+          "imports": [
+            {
+              "path": "github.com/mark3labs/mcp-go/client/transport",
+              "symbols": [
+                "NewStreamableHTTP",
+                "StreamableHTTP.Close",
+                "StreamableHTTP.SendNotification",
+                "StreamableHTTP.SendRequest",
+                "StreamableHTTP.SetRequestHandler"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "references": [
+      {
+        "type": "REPORT",
+        "url": "https://github.com/golang/vulndb/issues/6911"
+      },
+      {
+        "type": "REPORT",
+        "url": "https://github.com/mark3labs/mcp-go/issues/1164"
+      }
+    ],
+    "database_specific": {
+      "url": "https://pkg.go.dev/vuln/GO-2026-6911",
+      "review_status": "REVIEWED"
+    }
+  }
+}
+{
+  "progress": {
+    "message": "Checking the code against the vulnerabilities..."
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-6911",
+    "trace": [
+      {
+        "module": "github.com/mark3labs/mcp-go",
+        "version": "v1.5.0"
+      }
+    ]
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-6911",
+    "trace": [
+      {
+        "module": "github.com/mark3labs/mcp-go",
+        "version": "v1.5.0",
+        "package": "github.com/mark3labs/mcp-go/client/transport"
+      }
+    ]
+  }
+}
