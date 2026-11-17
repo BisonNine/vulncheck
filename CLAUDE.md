@@ -31,12 +31,20 @@ temporary directories.
   inside it, also when a host decodes `Config` as part of its own struct. The
   zero `Config` scans; keep it that way (fail closed).
 - `decide.go`: `Decide` judges a `govulncheck -format json` stream; `Report`.
-- `check.go`: `Check` runs govulncheck. `GovulncheckPackage` pins the release
-  run through `go run` unless a program is named; govulncheck on PATH is never
-  used implicitly. Bump the pin deliberately, and check the JSON protocol
-  version and message keys `decide.go` accepts against that release.
+- `check.go`: `Check` runs the govulncheck installed on PATH, or the program
+  named in `Options.Govulncheck`. It never installs one: when govulncheck is
+  missing it fails with the `go install …@latest` command. Because the version
+  is whatever is installed, `decide.go` accepts only known message keys and
+  JSON protocol versions; when govulncheck adds either, check it and extend
+  the lists deliberately.
 - `cmd/vulncheck`: the command. Exit 0 pass, 1 vulnerable, 2 error.
 - `app/`: application identity, from the standard template.
+
+## Requirements
+
+govulncheck installed and on PATH
+(`go install golang.org/x/vuln/cmd/govulncheck@latest`). Tests use stand-ins
+and need neither govulncheck nor the network.
 
 ## Conventions
 

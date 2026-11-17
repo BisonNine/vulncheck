@@ -8,6 +8,17 @@ vulnerable function. vulncheck fails on every such vulnerability unless the
 project lists it in its ignore list, optionally only until a date. Imported
 but uncalled vulnerabilities never fail the check.
 
+## Requirements
+
+govulncheck must be installed and on `PATH`:
+
+```sh
+go install golang.org/x/vuln/cmd/govulncheck@latest
+```
+
+vulncheck never installs it. Without it, vulncheck exits 2 and prints that
+command.
+
 ## Run
 
 ```sh
@@ -19,21 +30,12 @@ go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.0 [flags] [dir]
 | Flag | Meaning |
 | --- | --- |
 | `-config file` | Read the configuration from `file` instead of `<dir>/b9.yaml`. The file must exist. |
-| `-govulncheck program` | Run this govulncheck, a path or a name on `PATH`, instead of the pinned release. |
+| `-govulncheck program` | Run this govulncheck, a path or a name on `PATH`, instead of `govulncheck` from `PATH`. |
 | `-version` | Print the version and exit. |
 
-vulncheck runs a pinned govulncheck release with
-`go run golang.org/x/vuln/cmd/govulncheck@v1.9.0`, so the output is in the
-format it reads and nothing is installed. A `govulncheck` on `PATH` is not
-used unless you ask for it. To use a local binary, for instance offline:
-
-```sh
-go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-vulncheck -govulncheck "$(go env GOPATH)/bin/govulncheck" .
-```
-
 vulncheck fails, rather than passes, if govulncheck's output is in a format
-it does not know.
+it does not know, and names the govulncheck it ran so you know which one to
+update.
 
 From a Makefile:
 
@@ -105,9 +107,8 @@ a pass.
   runs on. Code built only for another GOOS/GOARCH, and nested modules, are
   not scanned; scan them separately, a nested module with
   `vulncheck <its directory>`.
-- With `-mod=vendor` in `GOFLAGS`, `go run` cannot fetch govulncheck. Install
-  it with that setting cleared (`GOFLAGS= go install …`) and pass
-  `-govulncheck` as above. A `vendor` directory alone is fine.
+- Vendored projects, including with `-mod=vendor` in `GOFLAGS`, are scanned
+  from their `vendor` directory.
 
 ## Library
 

@@ -11,7 +11,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -32,6 +31,15 @@ func fakeProgram(t *testing.T, dir, name, script string) string {
 	return path
 }
 
+// fakeOnPath puts a stand-in govulncheck alone on PATH and returns its path.
+func fakeOnPath(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	path := fakeProgram(t, bin, "govulncheck", "exit 0\n")
+	t.Setenv("PATH", bin)
+	return path
+}
+
 func mustDay(t *testing.T, s string) Day {
 	t.Helper()
 	d, err := ParseDay(s)
@@ -44,35 +52,31 @@ func mustDay(t *testing.T, s string) Day {
 func TestCommandSelection(t *testing.T) {
 	scan := []string{"-format", "json", "./..."}
 
-	pinned := append([]string{"run", GovulncheckPackage}, scan...)
-
-	t.Run("runs the pinned release", func(t *testing.T) {
-		t.Setenv("PATH", t.TempDir())
-		c, err := Options{}.command()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c.Name != "go" || !slices.Equal(c.Args, pinned) || c.Dir != "." {
-			t.Errorf("command = %+v, want go %v in .", c, pinned)
-		}
-	})
-
-	t.Run("govulncheck on PATH is not used", func(t *testing.T) {
-		bin := t.TempDir()
-		fakeProgram(t, bin, "govulncheck", "exit 0\n")
-		t.Setenv("PATH", bin)
+	t.Run("from PATH", func(t *testing.T) {
+		want := fakeOnPath(t)
 		c, err := Options{Dir: "/src/demo"}.command()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Name != "go" || !slices.Equal(c.Args, pinned) || c.Dir != "/src/demo" {
-			t.Errorf("command = %+v, want go %v in /src/demo", c, pinned)
+		if c.Name != want || !slices.Equal(c.Args, scan) || c.Dir != "/src/demo" {
+			t.Errorf("command = %+v, want %s %v in /src/demo", c, want, scan)
 		}
 	})
 
-	t.Run("pinned to a release", func(t *testing.T) {
-		if !regexp.MustCompile(`^golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+$`).MatchString(GovulncheckPackage) {
-			t.Errorf("GovulncheckPackage = %q, want an exact release", GovulncheckPackage)
+	t.Run("dir defaults to the current directory", func(t *testing.T) {
+		fakeOnPath(t)
+		c, err := Options{}.command()
+		if err != nil || c.Dir != "." {
+			t.Errorf("command = %+v, %v; want it run in .", c, err)
+		}
+	})
+
+	t.Run("not on PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		_, err := Options{}.command()
+		want := "govulncheck is not on PATH; install it with: go install golang.org/x/vuln/cmd/govulncheck@latest"
+		if err == nil || err.Error() != want {
+			t.Errorf("error = %v, want %q", err, want)
 		}
 	})
 
@@ -119,7 +123,7 @@ func TestCommandSelection(t *testing.T) {
 
 func TestCheck(t *testing.T) {
 	called := readFixture(t, "govulncheck-called.json")
-	t.Setenv("PATH", t.TempDir()) // the go run fallback; the runner is fake
+	prog := fakeOnPath(t) // the runner is fake; the program need only exist
 	today := time.Date(2026, 11, 17, 9, 0, 0, 0, time.Local)
 
 	var got Command
@@ -136,7 +140,7 @@ func TestCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if got.Dir != "/src/demo" || got.Name != "go" {
+	if got.Dir != "/src/demo" || got.Name != prog {
 		t.Errorf("ran %+v", got)
 	}
 	if r.Err() != nil || !slices.Equal(ids(r.Ignored), []string{"GO-2026-6911"}) {
@@ -190,7 +194,7 @@ func TestCheckValidatesIgnores(t *testing.T) {
 
 // A scan that fails is an error, never an empty result.
 func TestCheckFailsClosed(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
+	fakeOnPath(t)
 	tests := []struct {
 		name string
 		out  string
@@ -208,6 +212,19 @@ func TestCheckFailsClosed(t *testing.T) {
 				t.Fatal("expected an error")
 			}
 		})
+	}
+}
+
+// An output error names the program that was run, so the operator knows
+// which govulncheck to update.
+func TestCheckNamesProgram(t *testing.T) {
+	prog := fakeOnPath(t)
+	stream := strings.Replace(readFixture(t, "govulncheck-called.json"), `"protocol_version": "v1.0.0"`, `"protocol_version": "v2.0.0"`, 1)
+	opts := Options{Runner: func(context.Context, Command) ([]byte, error) { return []byte(stream), nil }}
+	_, err := Check(t.Context(), opts)
+	want := prog + `: govulncheck JSON protocol version "v2.0.0" is not supported (supported: v1.0.0)`
+	if err == nil || err.Error() != want {
+		t.Errorf("error = %v, want %q", err, want)
 	}
 }
 

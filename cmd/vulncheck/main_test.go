@@ -21,6 +21,30 @@ import (
 	"go.bison9.com/vulncheck/app"
 )
 
+// TestMain puts a stand-in govulncheck first on PATH, so the command finds a
+// program to hand to the fake runner without depending on the machine.
+func TestMain(m *testing.M) {
+	os.Exit(withStandIn(m))
+}
+
+func withStandIn(m *testing.M) int {
+	if runtime.GOOS == "windows" {
+		return m.Run()
+	}
+	bin, err := os.MkdirTemp("", "vulncheck-test-")
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = os.RemoveAll(bin) }()
+	if err := os.WriteFile(filepath.Join(bin, "govulncheck"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
+		panic(err)
+	}
+	return m.Run()
+}
+
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", name))
@@ -243,6 +267,22 @@ func TestRunDefaultDir(t *testing.T) {
 	}
 	if got, want := stdout.String(), "govulncheck is disabled in "+vulncheck.DefaultFile+".\n"; got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRunNotInstalled(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	f := &fake{}
+	var stdout, stderr bytes.Buffer
+	if code := run(t.Context(), []string{t.TempDir()}, &stdout, &stderr, f.run); code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	want := "govulncheck is not on PATH; install it with: go install golang.org/x/vuln/cmd/govulncheck@latest\n"
+	if !strings.HasSuffix(stderr.String(), want) || strings.Count(stderr.String(), "\n") != 1 {
+		t.Errorf("stderr = %q, want one line ending %q", &stderr, want)
+	}
+	if f.used || stdout.Len() != 0 {
+		t.Errorf("scanned %v, stdout %q", f.used, &stdout)
 	}
 }
 

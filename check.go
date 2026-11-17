@@ -16,11 +16,9 @@ import (
 	"time"
 )
 
-// GovulncheckPackage is the govulncheck release that Check runs, with
-// `go run`, unless Options.Govulncheck names a program. Running a pinned
-// release means the JSON output is the format this package was written
-// against, and nothing is installed as a side effect.
-const GovulncheckPackage = "golang.org/x/vuln/cmd/govulncheck@v1.9.0"
+// installHint is how to install govulncheck, for the error when it is not
+// on PATH. Check never installs it.
+const installHint = "go install golang.org/x/vuln/cmd/govulncheck@latest"
 
 // Command is one program to run: its name or path, its arguments, and the
 // directory to run it in.
@@ -46,8 +44,8 @@ type Options struct {
 	// Ignore is the ignore list, normally Config.Ignore.
 	Ignore []Ignore
 	// Govulncheck is the govulncheck program to run, a name looked up on PATH
-	// or a path. When it is "", Check runs `go run` at GovulncheckPackage,
-	// whatever govulncheck is on PATH.
+	// or a path; "" is govulncheck from PATH. Whatever version it is, its
+	// output must be in a JSON protocol version Decide knows.
 	Govulncheck string
 	// Now returns the current time; nil is time.Now. Ignore entries are
 	// compared with its date in its location.
@@ -58,7 +56,8 @@ type Options struct {
 
 // Check validates opts.Ignore, runs govulncheck -format json ./... in
 // opts.Dir and decides the result with Decide. The error is for an invalid
-// ignore list or a scan that could not be run or read; the vulnerabilities
+// ignore list, a govulncheck that is not installed, or a scan that could not
+// be run or read, which names the program that was run; the vulnerabilities
 // that fail the check are in the report (see Report.Err).
 func Check(ctx context.Context, opts Options) (Report, error) {
 	if err := (Config{Ignore: opts.Ignore}).Validate(); err != nil {
@@ -80,12 +79,15 @@ func Check(ctx context.Context, opts Options) (Report, error) {
 	if opts.Now != nil {
 		now = opts.Now
 	}
-	return Decide(bytes.NewReader(out), opts.Ignore, now())
+	report, err := Decide(bytes.NewReader(out), opts.Ignore, now())
+	if err != nil {
+		return Report{}, fmt.Errorf("%s: %w", cmd.Name, err)
+	}
+	return report, nil
 }
 
-// command is the govulncheck invocation for opts. A program named in
-// Govulncheck is made absolute, so a relative path means the same program
-// when run in Dir.
+// command is the govulncheck invocation for opts. The program is made
+// absolute, so a relative path means the same program when run in Dir.
 func (o Options) command() (Command, error) {
 	dir := o.Dir
 	if dir == "" {
@@ -100,7 +102,11 @@ func (o Options) command() (Command, error) {
 		}
 		return Command{Name: path, Args: args, Dir: dir}, nil
 	}
-	return Command{Name: "go", Args: append([]string{"run", GovulncheckPackage}, args...), Dir: dir}, nil
+	path, err := lookAbs("govulncheck")
+	if err != nil {
+		return Command{}, fmt.Errorf("govulncheck is not on PATH; install it with: %s", installHint)
+	}
+	return Command{Name: path, Args: args, Dir: dir}, nil
 }
 
 // lookAbs finds a program as exec.LookPath does and makes the result absolute.
