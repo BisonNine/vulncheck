@@ -1,7 +1,30 @@
 # vulncheck
 #
-# make is the standard build interface: make (test, then build), test, build,
-# clean, install, uninstall, lint, fmt, vet and update.
+# What it is: govulncheck with an ignore list. It runs the govulncheck found
+# on the PATH and fails when the scanned code calls a vulnerable function.
+#
+# What it is for: one vulnerability check shared by every project, used from
+# a project's own "make test":
+#
+#     govulncheck:
+#     	@go run go.bison9.com/vulncheck/cmd/vulncheck@latest .
+#
+# Temporary exceptions: a vulnerability with no fixed release can be excused
+# for a limited time in the project's b9.yaml:
+#
+#     govulncheck:
+#       enabled: true
+#       ignore:
+#         - id: GO-2026-0001              # the ID vulncheck printed
+#           reason: no fixed release yet  # required
+#           until: 20261231               # last day it is excused
+#
+# After that day the check fails again. Remove the entry once the dependency
+# is fixed. README.md has the full rules.
+#
+# This Makefile builds and tests vulncheck itself. make is the standard build
+# interface: make (test, then build), test, build, clean, install, uninstall,
+# lint, fmt, vet and update.
 
 BINARY_NAME = vulncheck
 BUILD_DIR   = bin

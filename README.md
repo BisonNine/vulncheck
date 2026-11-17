@@ -80,6 +80,19 @@ govulncheck:
 
 When the scan is turned off, vulncheck says so and exits 0.
 
+## Adding a temporary exception
+
+When the check fails on a vulnerability that has no fixed release yet:
+
+1. Take the ID from the `Vulnerable: GO-…` line.
+2. Add an entry under `govulncheck.ignore` in `b9.yaml` with that `id`, a
+   `reason`, and an `until` date a few weeks ahead.
+3. Run the check again: it passes and prints the vulnerability as ignored.
+
+After the `until` day the check fails again, so the exception comes back for
+review. When a fixed release exists, upgrade the dependency and delete the
+entry; a run tells you when an entry is no longer needed.
+
 ## Output and exit status
 
 One line per vulnerability or entry:

@@ -63,6 +63,34 @@ file is shared with a release tool; every other key is ignored.
   that way.
 - A file with more than one YAML document is an error.
 
+## Adding a temporary exception
+
+A project's `make test` fails when its code calls a vulnerable function. The
+normal fix is to upgrade the dependency. When no fixed release exists yet,
+excuse that one advisory for a limited time in the project's `b9.yaml`:
+
+```yaml
+govulncheck:
+  enabled: true
+  ignore:
+    - id: GO-2026-0001                 # the ID vulncheck printed
+      reason: no fixed release yet     # why it is excused; printed on every run
+      until: 20261231                  # last day it is excused
+```
+
+- Take the ID from the `Vulnerable: GO-…` line of the failed run.
+- Always give `until`, and keep it short. The entry is honoured through that
+  day; from the next day the run fails again with "ignore expired", so the
+  exception comes back for review. Extend the date only after checking again
+  for a fix.
+- Every run prints each excused vulnerability with its reason and date, so it
+  stays visible.
+- When the dependency is fixed, upgrade it and delete the entry. A run names
+  an entry that no longer matches anything: "Ignore entry … is no longer
+  needed and can be removed."
+- Never excuse a vulnerability any other way: do not turn the scan off, do
+  not call govulncheck directly, and do not catch the exit code.
+
 ## Exit codes (the command)
 
 - 0: nothing fails the check, or the scan is turned off.
