@@ -279,8 +279,8 @@ func TestRunUsage(t *testing.T) {
 	}
 }
 
-// The built command, run as a process with a stand-in govulncheck on PATH:
-// exit statuses are what a Makefile sees.
+// The built command, run as a process with a stand-in govulncheck: exit
+// statuses are what a Makefile sees.
 func TestBinary(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the stand-in govulncheck is a shell script")
@@ -324,8 +324,7 @@ func TestBinary(t *testing.T) {
 			if tt.conf != "" {
 				writeFile(t, filepath.Join(dir, vulncheck.DefaultFile), tt.conf)
 			}
-			cmd := exec.CommandContext(t.Context(), exe, dir)
-			cmd.Env = append(os.Environ(), "PATH="+bin)
+			cmd := exec.CommandContext(t.Context(), exe, "-govulncheck", filepath.Join(bin, "govulncheck"), dir)
 			out, err := cmd.CombinedOutput()
 			code := 0
 			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {

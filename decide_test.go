@@ -153,6 +153,13 @@ func TestDecideRejectsBadOutput(t *testing.T) {
 		{"module scan level", strings.Replace(called, `"scan_level": "symbol"`, `"scan_level": "module"`, 1)},
 		{"finding without trace", called + `{"finding": {"osv": "GO-2025-0001", "trace": []}}`},
 		{"finding without id", called + `{"finding": {"trace": [{"module": "m", "function": "F"}]}}`},
+		{"unknown message", called + `{"verdict": {"ok": true}}`},
+		{"message with no key", called + `{}`},
+		{"message with two known keys", called + `{"config": {"protocol_version": "v1.0.0", "scan_level": "symbol"}, "finding": {"osv": "GO-2025-0001", "trace": [{"module": "m", "function": "F"}]}}`},
+		{"known key in another case", called + `{"Finding": {"osv": "GO-2025-0001", "trace": [{"module": "m", "function": "F"}]}}`},
+		{"message that is not an object", called + `["finding"]`},
+		{"unknown protocol version", strings.Replace(called, `"protocol_version": "v1.0.0"`, `"protocol_version": "v2.0.0"`, 1)},
+		{"no protocol version", strings.Replace(called, `"protocol_version": "v1.0.0",`, ``, 1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,6 +167,50 @@ func TestDecideRejectsBadOutput(t *testing.T) {
 				t.Fatal("expected an error")
 			}
 		})
+	}
+}
+
+func TestDecideErrorMessages(t *testing.T) {
+	called := readFixture(t, "govulncheck-called.json")
+	tests := []struct {
+		name   string
+		stream string
+		want   string
+	}{
+		{"unknown message", called + `{"verdict": {}}`, `unknown message "verdict"`},
+		{"two keys", called + `{"osv": {}, "finding": {}}`, `a message has 2 keys ["finding" "osv"], expected exactly one`},
+		{
+			"protocol", strings.Replace(called, `"protocol_version": "v1.0.0"`, `"protocol_version": "v2.0.0"`, 1),
+			`govulncheck JSON protocol version "v2.0.0" is not supported (supported: v1.0.0)`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Decide(strings.NewReader(tt.stream), nil, time.Now())
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want one containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// Every top-level message govulncheck v1.9.0 writes is accepted, SBOM
+// included, which the captured fixtures lack.
+func TestDecideAcceptsEveryMessage(t *testing.T) {
+	sbom := `{"SBOM": {"go_version": "go1.27.4", "modules": [{"path": "example.com/demo"}], "roots": ["example.com/demo"]}}` + "\n"
+	r, err := Decide(strings.NewReader(readFixture(t, "govulncheck-called.json")+sbom), nil, time.Now())
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if !slices.Equal(ids(r.Fatal), []string{"GO-2026-6911"}) {
+		t.Errorf("fatal = %v", ids(r.Fatal))
+	}
+}
+
+func TestDecideValidatesIgnores(t *testing.T) {
+	_, err := Decide(strings.NewReader(readFixture(t, "govulncheck-called.json")), []Ignore{{ID: "GO-2026-6911"}}, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Errorf("error = %v, want the missing reason", err)
 	}
 }
 

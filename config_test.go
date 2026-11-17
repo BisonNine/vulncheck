@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/goccy/go-yaml"
 )
 
 // others is the rest of a release description: keys this package must not
@@ -86,7 +88,7 @@ func TestParse(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Parse: %v", err)
 				}
-				if cfg.Enabled != tt.wantEnabled || len(cfg.Ignore) != tt.wantIgnore {
+				if cfg.Disabled == tt.wantEnabled || len(cfg.Ignore) != tt.wantIgnore {
 					t.Fatalf("Config = %+v, want enabled %v with %d ignore entries", cfg, tt.wantEnabled, tt.wantIgnore)
 				}
 				if tt.wantIgnore == 0 {
@@ -139,6 +141,8 @@ func TestParseRejects(t *testing.T) {
 		{"tilde", "govulncheck: ~", "got null"},
 		{"duplicate key", "govulncheck: true\ngovulncheck: false", `mapping key "govulncheck" already defined`},
 		{"not YAML", "govulncheck: [true", ""},
+		{"timestamp date", block("    - {id: GO-2026-6911, reason: no fix, until: 2026-12-31T10:00:00Z}"), `got "2026-12-31T10:00:00Z"`},
+		{"two documents", "govulncheck: true\n---\ngovulncheck: false", "2 YAML documents, expected one"},
 	}
 	for _, tt := range tests {
 		for _, prefix := range []string{"", others} {
@@ -153,6 +157,100 @@ func TestParseRejects(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A Config that was never set scans: it cannot turn the check off.
+func TestZeroConfigScans(t *testing.T) {
+	var zero Config
+	if zero.Disabled {
+		t.Error("the zero Config is disabled")
+	}
+	cfg, err := Parse([]byte(others))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Disabled || len(cfg.Ignore) != 0 {
+		t.Errorf("Parse without the key = %+v, want the zero Config", cfg)
+	}
+}
+
+// A host embeds Config in its own struct and decodes the whole file with its
+// own decoder, which here is not strict: the block is still decoded strictly
+// and validated, and a missing key still scans.
+func TestEmbeddedConfig(t *testing.T) {
+	type host struct {
+		Name        string `yaml:"name"`
+		Govulncheck Config `yaml:"govulncheck"`
+	}
+	tests := []struct {
+		name         string
+		conf         string
+		wantDisabled bool
+		wantIgnore   int
+		wantErr      string
+	}{
+		{name: "key absent", conf: "name: demo\n"},
+		{name: "true", conf: "name: demo\ngovulncheck: true\n"},
+		{name: "false", conf: "name: demo\ngovulncheck: false\n", wantDisabled: true},
+		{
+			name:       "mapping",
+			conf:       "govulncheck:\n  enabled: true\n  ignore:\n    - {id: GO-2026-6911, reason: no fix, until: 20261231}\n",
+			wantIgnore: 1,
+		},
+		{name: "mapping disabled", conf: "govulncheck:\n  enabled: false\n", wantDisabled: true},
+		{name: "mapping without enabled", conf: "govulncheck:\n  ignore: []\n", wantErr: "enabled is required"},
+		{name: "unknown key in the block", conf: "govulncheck:\n  enabled: true\n  ignores: []\n", wantErr: "ignores"},
+		{name: "unknown key in an entry", conf: "govulncheck:\n  enabled: true\n  ignore:\n    - {id: GO-2026-6911, reason: r, note: x}\n", wantErr: "note"},
+		{name: "invalid entry", conf: "govulncheck:\n  enabled: true\n  ignore:\n    - {id: GO-2026-6911}\n", wantErr: "(GO-2026-6911).reason"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var h host
+			err := yaml.Unmarshal([]byte(tt.conf), &h)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want one containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.Govulncheck.Disabled != tt.wantDisabled || len(h.Govulncheck.Ignore) != tt.wantIgnore {
+				t.Errorf("Config = %+v, want disabled %v with %d entries", h.Govulncheck, tt.wantDisabled, tt.wantIgnore)
+			}
+		})
+	}
+}
+
+func TestParseDay(t *testing.T) {
+	for _, s := range []string{"20261231", "2026-12-31"} {
+		d, err := ParseDay(s)
+		if err != nil {
+			t.Fatalf("ParseDay(%q): %v", s, err)
+		}
+		if !d.Set() || d.String() != "2026-12-31" {
+			t.Errorf("ParseDay(%q) = %s, set %v", s, d, d.Set())
+		}
+		if !d.Covers(time.Date(2026, 12, 31, 23, 0, 0, 0, time.UTC)) || d.Covers(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)) {
+			t.Errorf("ParseDay(%q) covers the wrong days", s)
+		}
+		if err := (Config{Ignore: []Ignore{{ID: "GO-2026-6911", Reason: "r", Until: d}}}).Validate(); err != nil {
+			t.Errorf("Validate with ParseDay(%q): %v", s, err)
+		}
+	}
+	for _, s := range []string{"", " ", "20261332", "2026123", "31-12-2026", "2026-12-31T10:00:00Z"} {
+		if d, err := ParseDay(s); err == nil {
+			t.Errorf("ParseDay(%q) = %s, want an error", s, d)
+		}
+	}
+}
+
+func TestDayString(t *testing.T) {
+	var unset Day
+	if unset.Set() || unset.String() != "" {
+		t.Errorf("zero Day: set %v, String %q; want false, \"\"", unset.Set(), unset.String())
 	}
 }
 
@@ -189,7 +287,7 @@ func TestLoadFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err := LoadFile(path)
-	if err != nil || !cfg.Enabled || len(cfg.Ignore) != 1 {
+	if err != nil || cfg.Disabled || len(cfg.Ignore) != 1 {
 		t.Errorf("LoadFile = %+v, %v", cfg, err)
 	}
 

@@ -26,12 +26,15 @@ temporary directories.
 
 ## Layout
 
-- `config.go`: `Config`, `Ignore`, `Day`, `Parse`, `LoadFile`, `Validate`.
-  Only the top-level `govulncheck` key is read; decoding is strict inside it.
+- `config.go`: `Config`, `Ignore`, `Day`, `ParseDay`, `Parse`, `LoadFile`,
+  `Validate`. Only the top-level `govulncheck` key is read; decoding is strict
+  inside it, also when a host decodes `Config` as part of its own struct. The
+  zero `Config` scans; keep it that way (fail closed).
 - `decide.go`: `Decide` judges a `govulncheck -format json` stream; `Report`.
-- `check.go`: `Check` locates and runs govulncheck. `GovulncheckPackage` pins
-  the release used through `go run` when govulncheck is not on PATH; bump it
-  deliberately.
+- `check.go`: `Check` runs govulncheck. `GovulncheckPackage` pins the release
+  run through `go run` unless a program is named; govulncheck on PATH is never
+  used implicitly. Bump the pin deliberately, and check the JSON protocol
+  version and message keys `decide.go` accepts against that release.
 - `cmd/vulncheck`: the command. Exit 0 pass, 1 vulnerable, 2 error.
 - `app/`: application identity, from the standard template.
 

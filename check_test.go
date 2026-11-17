@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -31,31 +32,47 @@ func fakeProgram(t *testing.T, dir, name, script string) string {
 	return path
 }
 
+func mustDay(t *testing.T, s string) Day {
+	t.Helper()
+	d, err := ParseDay(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func TestCommandSelection(t *testing.T) {
 	scan := []string{"-format", "json", "./..."}
 
-	t.Run("on PATH", func(t *testing.T) {
-		bin := t.TempDir()
-		want := fakeProgram(t, bin, "govulncheck", "exit 0\n")
-		t.Setenv("PATH", bin)
-		c, err := Options{Dir: "/src/demo"}.command()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c.Name != want || !slices.Equal(c.Args, scan) || c.Dir != "/src/demo" {
-			t.Errorf("command = %+v, want %s %v in /src/demo", c, want, scan)
-		}
-	})
+	pinned := append([]string{"run", GovulncheckPackage}, scan...)
 
-	t.Run("not on PATH runs the pinned release", func(t *testing.T) {
+	t.Run("runs the pinned release", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
 		c, err := Options{}.command()
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := append([]string{"run", GovulncheckPackage}, scan...)
-		if c.Name != "go" || !slices.Equal(c.Args, want) || c.Dir != "." {
-			t.Errorf("command = %+v, want go %v in .", c, want)
+		if c.Name != "go" || !slices.Equal(c.Args, pinned) || c.Dir != "." {
+			t.Errorf("command = %+v, want go %v in .", c, pinned)
+		}
+	})
+
+	t.Run("govulncheck on PATH is not used", func(t *testing.T) {
+		bin := t.TempDir()
+		fakeProgram(t, bin, "govulncheck", "exit 0\n")
+		t.Setenv("PATH", bin)
+		c, err := Options{Dir: "/src/demo"}.command()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Name != "go" || !slices.Equal(c.Args, pinned) || c.Dir != "/src/demo" {
+			t.Errorf("command = %+v, want go %v in /src/demo", c, pinned)
+		}
+	})
+
+	t.Run("pinned to a release", func(t *testing.T) {
+		if !regexp.MustCompile(`^golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+$`).MatchString(GovulncheckPackage) {
+			t.Errorf("GovulncheckPackage = %q, want an exact release", GovulncheckPackage)
 		}
 	})
 
@@ -108,7 +125,7 @@ func TestCheck(t *testing.T) {
 	var got Command
 	opts := Options{
 		Dir:    "/src/demo",
-		Ignore: ignores(t, "- {id: GO-2026-6911, reason: no fix yet, until: 20261117}"),
+		Ignore: []Ignore{{ID: "GO-2026-6911", Reason: "no fix yet", Until: mustDay(t, "2026-11-17")}},
 		Now:    func() time.Time { return today },
 		Runner: func(_ context.Context, c Command) ([]byte, error) {
 			got = c
@@ -135,6 +152,39 @@ func TestCheck(t *testing.T) {
 	}
 	if !slices.Equal(ids(r.Expired), []string{"GO-2026-6911"}) || r.Err() == nil {
 		t.Errorf("report = %+v, want GO-2026-6911 expired", r)
+	}
+}
+
+// An ignore list built in code is validated before anything runs.
+func TestCheckValidatesIgnores(t *testing.T) {
+	until, err := ParseDay("20261231")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		ignore []Ignore
+		want   string
+	}{
+		{"missing reason", []Ignore{{ID: "GO-2026-6911"}}, "(GO-2026-6911).reason"},
+		{"bad id", []Ignore{{ID: "CVE-2026-1", Reason: "r"}}, "id must be a Go vulnerability ID"},
+		{"duplicate id", []Ignore{{ID: "GO-2026-6911", Reason: "a"}, {ID: "GO-2026-6911", Reason: "b", Until: until}}, "duplicate id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ran := false
+			opts := Options{Ignore: tt.ignore, Runner: func(context.Context, Command) ([]byte, error) {
+				ran = true
+				return nil, nil
+			}}
+			_, err := Check(t.Context(), opts)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want one containing %q", err, tt.want)
+			}
+			if ran {
+				t.Error("govulncheck ran with an invalid ignore list")
+			}
+		})
 	}
 }
 

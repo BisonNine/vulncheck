@@ -19,12 +19,21 @@ go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.0 [flags] [dir]
 | Flag | Meaning |
 | --- | --- |
 | `-config file` | Read the configuration from `file` instead of `<dir>/b9.yaml`. The file must exist. |
-| `-govulncheck program` | Run this govulncheck. |
+| `-govulncheck program` | Run this govulncheck, a path or a name on `PATH`, instead of the pinned release. |
 | `-version` | Print the version and exit. |
 
-vulncheck uses `govulncheck` from `PATH` when there is one. Otherwise it runs
-a pinned release with `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0`, so
-nothing is installed.
+vulncheck runs a pinned govulncheck release with
+`go run golang.org/x/vuln/cmd/govulncheck@v1.9.0`, so the output is in the
+format it reads and nothing is installed. A `govulncheck` on `PATH` is not
+used unless you ask for it. To use a local binary, for instance offline:
+
+```sh
+go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+vulncheck -govulncheck "$(go env GOPATH)/bin/govulncheck" .
+```
+
+vulncheck fails, rather than passes, if govulncheck's output is in a format
+it does not know.
 
 From a Makefile:
 
@@ -89,6 +98,16 @@ No called vulnerabilities.
 
 A scan that fails or produces output vulncheck cannot read is an error, never
 a pass.
+
+## Limits
+
+- govulncheck scans the module in the scanned directory, for the platform it
+  runs on. Code built only for another GOOS/GOARCH, and nested modules, are
+  not scanned; scan them separately, a nested module with
+  `vulncheck <its directory>`.
+- With `-mod=vendor` in `GOFLAGS`, `go run` cannot fetch govulncheck. Install
+  it with that setting cleared (`GOFLAGS= go install …`) and pass
+  `-govulncheck` as above. A `vendor` directory alone is fine.
 
 ## Library
 

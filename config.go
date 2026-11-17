@@ -10,6 +10,11 @@
 //
 // The configuration is the govulncheck key of a YAML file, by default
 // b9.yaml in the project directory. Every other key in that file is ignored.
+//
+// Validation: Parse and LoadFile validate what they return, and so does
+// decoding a Config through its UnmarshalYAML, for instance as a field of the
+// caller's own struct. Check and Decide validate the ignore list they are
+// given, so a Config built in code is checked before it is used.
 package vulncheck
 
 import (
@@ -22,6 +27,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 )
 
 // DefaultFile is the name of the file, in the project directory, that holds
@@ -32,9 +38,14 @@ const DefaultFile = "b9.yaml"
 // enables or disables the scan, or a mapping with enabled and ignore. A called
 // vulnerability is fatal unless it is listed in Ignore and the entry has not
 // expired.
+//
+// The zero value scans with nothing ignored, so a Config that was never set,
+// such as a field decoded from a file without the govulncheck key, never
+// turns the check off.
 type Config struct {
-	Enabled bool
-	Ignore  []Ignore
+	// Disabled is true when the configuration turns the scan off.
+	Disabled bool
+	Ignore   []Ignore
 }
 
 // Ignore excuses one advisory, by its Go vulnerability ID, optionally only
@@ -46,8 +57,9 @@ type Ignore struct {
 }
 
 // Day is the calendar day an ignore entry runs to, inclusive. In YAML it is
-// YYYYMMDD, as an integer or a string, or YYYY-MM-DD. A malformed value is
-// kept as written and reported by Validate.
+// YYYYMMDD, as an integer or a string, or YYYY-MM-DD; in code it is made with
+// ParseDay. The zero Day is no end date. A malformed value decoded from YAML
+// is kept as written and reported by Validate.
 type Day struct {
 	raw     string
 	present bool
@@ -71,48 +83,58 @@ func LoadFile(path string) (Config, error) {
 // Parse reads the configuration from the govulncheck key of a YAML document
 // and validates it. Every other top-level key is ignored; inside the
 // govulncheck block an unknown key is an error. A document without the key
-// gives an enabled scan with no ignore entries.
+// gives the zero Config: scan, nothing ignored. A key with no value, or more
+// than one document, is an error.
 func Parse(data []byte) (Config, error) {
+	file, err := parser.ParseBytes(data, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	if len(file.Docs) > 1 {
+		return Config{}, fmt.Errorf("the file holds %d YAML documents, expected one", len(file.Docs))
+	}
+
 	var top struct {
-		Govulncheck *nodeOf `yaml:"govulncheck"`
+		Govulncheck *Config `yaml:"govulncheck"`
 	}
 	if err := yaml.Unmarshal(data, &top); err != nil {
 		return Config{}, err
 	}
-	if top.Govulncheck == nil {
-		// The decoder passes over a null value, so tell an absent key from
-		// `govulncheck:` with nothing after it, which is a mistake.
-		var keys map[string]any
-		if err := yaml.Unmarshal(data, &keys); err != nil {
-			return Config{}, err
-		}
-		if _, ok := keys["govulncheck"]; ok {
-			return Config{}, errors.New("govulncheck must be true, false or a mapping with enabled and ignore, got null")
-		}
-		return Config{Enabled: true}, nil
+	if top.Govulncheck != nil {
+		return *top.Govulncheck, nil
 	}
-	var cfg Config
-	// Strict decoding: a typo in a key is a silent misconfiguration otherwise.
-	if err := yaml.NodeToValue(top.Govulncheck.node, &cfg, yaml.Strict()); err != nil {
+	// The decoder passes over a null value, so tell an absent key from
+	// `govulncheck:` with nothing after it, which is a mistake.
+	var keys map[string]any
+	if err := yaml.Unmarshal(data, &keys); err != nil {
 		return Config{}, err
 	}
+	if _, ok := keys["govulncheck"]; ok {
+		return Config{}, errors.New("govulncheck must be true, false or a mapping with enabled and ignore, got null")
+	}
+	return Config{}, nil
+}
+
+// UnmarshalYAML decodes the value of the govulncheck key strictly, whatever
+// options the caller's decoder has, and validates it: an unknown key inside
+// the block is an error, not a silent misconfiguration. A null value is not
+// decoded at all and leaves the zero Config.
+func (c *Config) UnmarshalYAML(node ast.Node) error {
+	var v configValue
+	if err := yaml.NodeToValue(node, &v, yaml.Strict()); err != nil {
+		return err
+	}
+	cfg := Config(v)
 	if err := cfg.Validate(); err != nil {
-		return Config{}, err
+		return err
 	}
-	return cfg, nil
-}
-
-// nodeOf captures a value's syntax tree, so that one key of a document can be
-// decoded strictly while the rest of the document is not decoded at all.
-type nodeOf struct {
-	node ast.Node
-}
-
-// UnmarshalYAML records the node.
-func (n *nodeOf) UnmarshalYAML(node ast.Node) error {
-	n.node = node
+	*c = cfg
 	return nil
 }
+
+// configValue is Config without its UnmarshalYAML, for decoding the two
+// forms.
+type configValue Config
 
 // configBlock is the mapping form. Enabled is a pointer so that a block which
 // leaves it out is reported rather than silently disabling the scan.
@@ -124,14 +146,14 @@ type configBlock struct {
 // UnmarshalYAML accepts true, false or the mapping form. The mapping is
 // decoded by the same decoder, so strict decoding still rejects an unknown
 // key inside it.
-func (c *Config) UnmarshalYAML(unmarshal func(any) error) error {
+func (c *configValue) UnmarshalYAML(unmarshal func(any) error) error {
 	var raw any
 	if err := unmarshal(&raw); err != nil {
 		return err
 	}
 	switch v := raw.(type) {
 	case bool:
-		*c = Config{Enabled: v}
+		*c = configValue{Disabled: !v}
 		return nil
 	case map[string]any:
 		var b configBlock
@@ -141,7 +163,7 @@ func (c *Config) UnmarshalYAML(unmarshal func(any) error) error {
 		if b.Enabled == nil {
 			return errors.New("govulncheck: enabled is required when govulncheck is a mapping")
 		}
-		*c = Config{Enabled: *b.Enabled, Ignore: b.Ignore}
+		*c = configValue{Disabled: !*b.Enabled, Ignore: b.Ignore}
 		return nil
 	case string:
 		return fmt.Errorf("govulncheck must be true, false or a mapping with enabled and ignore, got the string %q", v)
@@ -181,13 +203,24 @@ func (d *Day) UnmarshalYAML(unmarshal func(any) error) error {
 	case string:
 		d.raw = v
 	case time.Time:
-		// A YAML timestamp such as 2026-12-31 may arrive already parsed.
-		d.raw = v.Format(time.DateOnly)
+		// A full YAML timestamp decodes as a time; keep it in its own form so
+		// validation reports it, since only a day is accepted.
+		d.raw = v.Format(time.RFC3339)
 	default:
 		d.raw = fmt.Sprint(v)
 	}
 	d.day = parseDay(d.raw)
 	return nil
+}
+
+// ParseDay returns the day written YYYYMMDD or YYYY-MM-DD, the spellings
+// accepted in YAML.
+func ParseDay(s string) (Day, error) {
+	d := Day{raw: s, present: true, day: parseDay(s)}
+	if d.day.IsZero() {
+		return Day{}, fmt.Errorf("a day must be written YYYYMMDD or YYYY-MM-DD, got %q", s)
+	}
+	return d, nil
 }
 
 // parseDay parses YYYYMMDD or YYYY-MM-DD, returning the zero time for
@@ -204,8 +237,13 @@ func parseDay(s string) time.Time {
 // Set reports whether the entry has an end date.
 func (d Day) Set() bool { return d.present }
 
-// String renders the day as YYYY-MM-DD.
-func (d Day) String() string { return d.day.Format(time.DateOnly) }
+// String renders the day as YYYY-MM-DD, or "" when there is no valid day.
+func (d Day) String() string {
+	if d.day.IsZero() {
+		return ""
+	}
+	return d.day.Format(time.DateOnly)
+}
 
 // Covers reports whether an entry with this end date still applies on today's
 // date in today's location. An entry without an end date always applies.

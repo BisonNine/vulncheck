@@ -57,7 +57,7 @@ func parseArgs(argv []string, stderr io.Writer) (a args, code int, done bool) {
 	flags.SetOutput(stderr)
 	flags.StringVar(&a.configPath, "config", "", "read the configuration from `file` (default <dir>/"+vulncheck.DefaultFile+")")
 	flags.StringVar(&a.govulncheck, "govulncheck", "",
-		"run this govulncheck `program` (default: govulncheck from PATH, otherwise go run "+vulncheck.GovulncheckPackage+")")
+		"run this govulncheck `program` instead of go run "+vulncheck.GovulncheckPackage)
 	flags.BoolVar(&a.version, "version", false, "print the version and exit")
 	flags.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "Usage: %s [flags] [dir]\n\n%s.\n\nExit status: 0 pass, 1 vulnerable code is called, 2 error.\n\nFlags:\n",
@@ -104,11 +104,11 @@ func run(ctx context.Context, argv []string, stdout, stderr io.Writer, runner vu
 	case err == nil:
 	case a.configPath == "" && errors.Is(err, fs.ErrNotExist):
 		// No configuration: scan with nothing ignored.
-		cfg = vulncheck.Config{Enabled: true}
+		cfg = vulncheck.Config{}
 	default:
 		return fail(stderr, err, exitError)
 	}
-	if !cfg.Enabled {
+	if cfg.Disabled {
 		_, _ = fmt.Fprintf(stdout, "govulncheck is disabled in %s.\n", path)
 		return exitPass
 	}

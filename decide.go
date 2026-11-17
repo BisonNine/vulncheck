@@ -11,31 +11,45 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 )
 
-// govulncheck's JSON output is a stream of messages, each an object with one
-// of these keys. Only the fields the decision needs are declared. The format
-// is golang.org/x/vuln's internal/govulncheck message types.
-type message struct {
-	Config *struct {
-		ScanLevel string `json:"scan_level"`
-	} `json:"config"`
-	OSV *struct {
-		ID      string `json:"id"`
-		Summary string `json:"summary"`
-	} `json:"osv"`
-	Finding *struct {
-		OSV          string `json:"osv"`
-		FixedVersion string `json:"fixed_version"`
-		Trace        []struct {
-			Module   string `json:"module"`
-			Version  string `json:"version"`
-			Function string `json:"function"`
-		} `json:"trace"`
-	} `json:"finding"`
+// govulncheck's JSON output is a stream of messages, each an object with
+// exactly one of these keys; see golang.org/x/vuln's internal/govulncheck
+// Message type. Only the fields the decision needs are declared.
+const (
+	keyConfig   = "config"
+	keyProgress = "progress"
+	keySBOM     = "SBOM"
+	keyOSV      = "osv"
+	keyFinding  = "finding"
+)
+
+// protocolVersions are the versions of govulncheck's JSON protocol this
+// package reads.
+var protocolVersions = []string{"v1.0.0"}
+
+type configMessage struct {
+	ProtocolVersion string `json:"protocol_version"`
+	ScanLevel       string `json:"scan_level"`
+}
+
+type osvMessage struct {
+	ID      string `json:"id"`
+	Summary string `json:"summary"`
+}
+
+type findingMessage struct {
+	OSV          string `json:"osv"`
+	FixedVersion string `json:"fixed_version"`
+	Trace        []struct {
+		Module   string `json:"module"`
+		Version  string `json:"version"`
+		Function string `json:"function"`
+	} `json:"trace"`
 }
 
 // Vuln is one vulnerability the scanned code calls.
@@ -59,14 +73,19 @@ type Report struct {
 }
 
 // Decide reads the output of govulncheck -format json and sorts what it found
-// against the ignore list, on the given day.
+// against the ignore list, on the given day. The ignore list is validated
+// first, as Config.Validate does.
 //
 // In JSON mode govulncheck exits 0 whatever it finds and reports findings at
 // module, package and symbol level. Its text mode fails only on a called
 // vulnerability: one with a finding whose innermost frame names a function.
 // Decide reproduces that. Output that is not a symbol-level govulncheck
-// stream is an error, never "no findings".
+// stream in a protocol version this package knows, or that holds a message
+// it does not recognise, is an error, never "no findings".
 func Decide(stream io.Reader, ignores []Ignore, today time.Time) (Report, error) {
+	if err := (Config{Ignore: ignores}).Validate(); err != nil {
+		return Report{}, err
+	}
 	called, err := readCalled(stream)
 	if err != nil {
 		return Report{}, err
@@ -83,7 +102,7 @@ func readCalled(stream io.Reader) (map[string]*Vuln, error) {
 
 	dec := json.NewDecoder(stream)
 	for {
-		var m message
+		var m map[string]json.RawMessage
 		err := dec.Decode(&m)
 		if errors.Is(err, io.EOF) {
 			break
@@ -91,16 +110,29 @@ func readCalled(stream io.Reader) (map[string]*Vuln, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading govulncheck output: %w", err)
 		}
-		switch {
-		case m.Config != nil:
-			if m.Config.ScanLevel != "symbol" {
-				return nil, fmt.Errorf("govulncheck scanned at %q level, expected symbol", m.Config.ScanLevel)
+		key, body, err := onlyKey(m)
+		if err != nil {
+			return nil, err
+		}
+		switch key {
+		case keyConfig:
+			if err := readConfig(body); err != nil {
+				return nil, err
 			}
 			sawConfig = true
-		case m.OSV != nil:
-			summaries[m.OSV.ID] = m.OSV.Summary
-		case m.Finding != nil:
-			f := m.Finding
+		case keyProgress, keySBOM:
+			// Neither affects the decision.
+		case keyOSV:
+			var o osvMessage
+			if err := json.Unmarshal(body, &o); err != nil {
+				return nil, fmt.Errorf("reading govulncheck output: %w", err)
+			}
+			summaries[o.ID] = o.Summary
+		case keyFinding:
+			var f findingMessage
+			if err := json.Unmarshal(body, &f); err != nil {
+				return nil, fmt.Errorf("reading govulncheck output: %w", err)
+			}
 			if f.OSV == "" || len(f.Trace) == 0 {
 				return nil, errors.New("reading govulncheck output: a finding has no vulnerability ID or no trace")
 			}
@@ -117,6 +149,47 @@ func readCalled(stream io.Reader) (map[string]*Vuln, error) {
 		v.Summary = summaries[id]
 	}
 	return called, nil
+}
+
+// onlyKey returns the one key of a message and its value. A message with no
+// key, more than one, or one this package does not know is an error: the
+// format has changed and the stream cannot be trusted.
+func onlyKey(m map[string]json.RawMessage) (string, json.RawMessage, error) {
+	if len(m) != 1 {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return "", nil, fmt.Errorf("reading govulncheck output: a message has %d keys %q, expected exactly one", len(m), keys)
+	}
+	var key string
+	for k := range m {
+		key = k
+	}
+	switch key {
+	case keyConfig, keyProgress, keySBOM, keyOSV, keyFinding:
+		return key, m[key], nil
+	default:
+		return "", nil, fmt.Errorf("reading govulncheck output: unknown message %q", key)
+	}
+}
+
+// readConfig checks the config message: a protocol version this package
+// reads and a symbol-level scan.
+func readConfig(body json.RawMessage) error {
+	var c configMessage
+	if err := json.Unmarshal(body, &c); err != nil {
+		return fmt.Errorf("reading govulncheck output: %w", err)
+	}
+	if !slices.Contains(protocolVersions, c.ProtocolVersion) {
+		return fmt.Errorf("govulncheck JSON protocol version %q is not supported (supported: %s)",
+			c.ProtocolVersion, strings.Join(protocolVersions, ", "))
+	}
+	if c.ScanLevel != "symbol" {
+		return fmt.Errorf("govulncheck scanned at %q level, expected symbol", c.ScanLevel)
+	}
+	return nil
 }
 
 // sortCalled sorts the called vulnerabilities against the ignore list.
