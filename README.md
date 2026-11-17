@@ -22,7 +22,7 @@ command.
 ## Run
 
 ```sh
-go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1 [flags] [dir]
+go run go.bison9.com/vulncheck/cmd/vulncheck@latest [flags] [dir]
 ```
 
 `dir` is the project to scan and defaults to the current directory.
@@ -41,10 +41,10 @@ From a Makefile:
 
 ```make
 govulncheck:
-	@go run go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1 .
+	@go run go.bison9.com/vulncheck/cmd/vulncheck@latest .
 ```
 
-To install the command instead: `go install go.bison9.com/vulncheck/cmd/vulncheck@v0.1.1`.
+To install the command instead: `go install go.bison9.com/vulncheck/cmd/vulncheck@latest`.
 
 ## Configuration
 

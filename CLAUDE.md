@@ -94,11 +94,12 @@ file is shared with a release tool; every other key is ignored.
 
 ## How consumers use it
 
-- A Makefile target runs the command at a released version:
+- A Makefile target runs the command at the latest release, never a pinned
+  version, so one release reaches every project that uses it:
 
   ```make
   govulncheck:
-  	@go run go.bison9.com/vulncheck/cmd/vulncheck@vX.Y.Z .
+  	@go run go.bison9.com/vulncheck/cmd/vulncheck@latest .
   ```
 
 - A Go program imports `go.bison9.com/vulncheck`: `LoadFile`, then `Check`.
