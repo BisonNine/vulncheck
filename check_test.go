@@ -1,0 +1,194 @@
+/******************************************************************************
+ * Copyright (c) 2026 Bison9 Software,                                        *
+ * a division of Tenebris Technologies Inc.                                   *
+ * Please see LICENSE file for details.                                       *
+ ******************************************************************************/
+
+package vulncheck
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+// fakeProgram writes an executable shell script named name into dir.
+func fakeProgram(t *testing.T, dir, name, script string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake program is a shell script")
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestCommandSelection(t *testing.T) {
+	scan := []string{"-format", "json", "./..."}
+
+	t.Run("on PATH", func(t *testing.T) {
+		bin := t.TempDir()
+		want := fakeProgram(t, bin, "govulncheck", "exit 0\n")
+		t.Setenv("PATH", bin)
+		c, err := Options{Dir: "/src/demo"}.command()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Name != want || !slices.Equal(c.Args, scan) || c.Dir != "/src/demo" {
+			t.Errorf("command = %+v, want %s %v in /src/demo", c, want, scan)
+		}
+	})
+
+	t.Run("not on PATH runs the pinned release", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		c, err := Options{}.command()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := append([]string{"run", GovulncheckPackage}, scan...)
+		if c.Name != "go" || !slices.Equal(c.Args, want) || c.Dir != "." {
+			t.Errorf("command = %+v, want go %v in .", c, want)
+		}
+	})
+
+	t.Run("override by path", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		fakeProgram(t, dir, "scanner", "exit 0\n")
+		// Another govulncheck on PATH must not be preferred to the override.
+		bin := t.TempDir()
+		fakeProgram(t, bin, "govulncheck", "exit 0\n")
+		t.Setenv("PATH", bin)
+
+		c, err := Options{Dir: t.TempDir(), Govulncheck: "./scanner"}.command()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Relative to where the caller is, not to the directory scanned.
+		if want := filepath.Join(wd, "scanner"); c.Name != want || !slices.Equal(c.Args, scan) {
+			t.Errorf("command = %+v, want %s %v", c, want, scan)
+		}
+	})
+
+	t.Run("override by name", func(t *testing.T) {
+		bin := t.TempDir()
+		want := fakeProgram(t, bin, "govulncheck-1.9", "exit 0\n")
+		t.Setenv("PATH", bin)
+		c, err := Options{Govulncheck: "govulncheck-1.9"}.command()
+		if err != nil || c.Name != want {
+			t.Errorf("command = %+v, %v; want %s", c, err, want)
+		}
+	})
+
+	t.Run("override that does not exist", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "nothing")
+		if _, err := (Options{Govulncheck: missing}).command(); err == nil || !strings.Contains(err.Error(), missing) {
+			t.Errorf("error = %v, want one naming %s", err, missing)
+		}
+	})
+}
+
+func TestCheck(t *testing.T) {
+	called := readFixture(t, "govulncheck-called.json")
+	t.Setenv("PATH", t.TempDir()) // the go run fallback; the runner is fake
+	today := time.Date(2026, 11, 17, 9, 0, 0, 0, time.Local)
+
+	var got Command
+	opts := Options{
+		Dir:    "/src/demo",
+		Ignore: ignores(t, "- {id: GO-2026-6911, reason: no fix yet, until: 20261117}"),
+		Now:    func() time.Time { return today },
+		Runner: func(_ context.Context, c Command) ([]byte, error) {
+			got = c
+			return []byte(called), nil
+		},
+	}
+	r, err := Check(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if got.Dir != "/src/demo" || got.Name != "go" {
+		t.Errorf("ran %+v", got)
+	}
+	if r.Err() != nil || !slices.Equal(ids(r.Ignored), []string{"GO-2026-6911"}) {
+		t.Errorf("report = %+v, want GO-2026-6911 ignored", r)
+	}
+
+	// The next day the same entry has expired: the clock is Now, not the
+	// real time.
+	opts.Now = func() time.Time { return today.AddDate(0, 0, 1) }
+	r, err = Check(t.Context(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ids(r.Expired), []string{"GO-2026-6911"}) || r.Err() == nil {
+		t.Errorf("report = %+v, want GO-2026-6911 expired", r)
+	}
+}
+
+// A scan that fails is an error, never an empty result.
+func TestCheckFailsClosed(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	tests := []struct {
+		name string
+		out  string
+		err  error
+	}{
+		{"runner error", "", errors.New("exit status 1")},
+		{"runner error with output", readFixture(t, "govulncheck-called.json"), errors.New("exit status 1")},
+		{"no output", "", nil},
+		{"text output", "No vulnerabilities found.\n", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := Options{Runner: func(context.Context, Command) ([]byte, error) { return []byte(tt.out), tt.err }}
+			if _, err := Check(t.Context(), opts); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
+func TestExecRunner(t *testing.T) {
+	dir := t.TempDir()
+	ok := fakeProgram(t, dir, "ok", "pwd\n")
+	out, err := execRunner(t.Context(), Command{Name: ok, Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != wantDir {
+		t.Errorf("ran in %q, want %q", got, wantDir)
+	}
+
+	bad := fakeProgram(t, dir, "bad", "echo 'partial' \necho 'go: errors loading packages' >&2\nexit 1\n")
+	_, err = execRunner(t.Context(), Command{Name: bad, Args: []string{"-x"}, Dir: dir})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{bad + " -x: exit status 1", "\n  go: errors loading packages"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+
+	silent := fakeProgram(t, dir, "silent", "exit 3\n")
+	if _, err := execRunner(t.Context(), Command{Name: silent, Dir: dir}); err == nil || err.Error() != silent+": exit status 3" {
+		t.Errorf("error = %v", err)
+	}
+}
